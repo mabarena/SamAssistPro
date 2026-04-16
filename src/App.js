@@ -22,6 +22,7 @@ const BASE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1uipnUzwMNwBJWRJ6
 const IMAGE_DB_URL = "https://docs.google.com/spreadsheets/d/1QRvpQkJeFEdbx6L4zcZ_UT6fByAGz5odsd8HhASCwME/export?format=csv&gid=0";
 const INVENTORY_SHEET_URL = "https://docs.google.com/spreadsheets/d/1OR61dDEtCan2CufmV4UXYtLtQIFuX0MTSIKMJ9kA_RU/export?format=csv&gid=1255047374";
 const COLOR_STOCK_SHEET_URL = "https://docs.google.com/spreadsheets/d/1OR61dDEtCan2CufmV4UXYtLtQIFuX0MTSIKMJ9kA_RU/export?format=csv&gid=904395252";
+const NOTICE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1QRvpQkJeFEdbx6L4zcZ_UT6fByAGz5odsd8HhASCwME/export?format=csv&gid=689704684";
 const ADMIN_WHATSAPP_NUMBER = "918888851642"; 
 const AUTH_SHEET_GID = "1959501734"; 
 const AUTH_SHEET_URL = `https://docs.google.com/spreadsheets/d/1QRvpQkJeFEdbx6L4zcZ_UT6fByAGz5odsd8HhASCwME/export?format=csv&gid=${AUTH_SHEET_GID}`;
@@ -129,6 +130,40 @@ const calculateStockAge = (dateStr) => {
   return Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
 };
 
+const fetchNoticeData = async () => {
+  try {
+    const res = await fetch(NOTICE_SHEET_URL);
+    if (!res.ok) return { message: '', buttons: [] };
+    const text = await res.text();
+    if (text.trim().toLowerCase().startsWith('<!doctype html>')) return { message: '', buttons: [] };
+    const rows = csvToArray(text);
+    
+    let message = '';
+    const buttons = [];
+    
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i]) {
+        // Find Message from Column A
+        if (!message && rows[i][0]) {
+          const val = String(rows[i][0]).trim();
+          if (val && val.toUpperCase() !== 'MESSAGE') {
+            message = val;
+          }
+        }
+        // Extract Custom Buttons from Column B & C
+        if (i > 0 && rows[i].length >= 2) {
+          const btnName = String(rows[i][1] || '').trim();
+          const btnUrl = String(rows[i][2] || '').trim();
+          if (btnName && btnUrl && btnName.toUpperCase() !== 'BUTTON NAME') {
+            buttons.push({ name: btnName, url: btnUrl });
+          }
+        }
+      }
+    }
+    return { message, buttons };
+  } catch(e) { return { message: '', buttons: [] }; }
+};
+
 const fetchInventoryData = async () => {
   try {
     const res = await fetch(INVENTORY_SHEET_URL);
@@ -153,7 +188,7 @@ const fetchInventoryData = async () => {
         if (matchCode.length >= 11) variant = matchCode.substring(10, 11); 
         matchCode = base5 + variant; 
       }
-      invList.push({ pCode: rawPCode, matchCode, mName, imei, date, dp, mop });
+      invList.push({ pCode: rawPCode, matchCode, mName, imei, date, dp, mop, outlet: available });
     }
     return invList;
   } catch(e) { return []; }
@@ -1178,12 +1213,19 @@ const InventoryModal = memo(({ phone, onClose }) => {
                 )}
                 
                 <div className="mb-3 pr-16">
-                  <span className="text-[14px] font-black text-slate-800 leading-tight block mb-0.5">
+                  <span className="text-[14px] font-black text-slate-800 leading-tight block mb-1">
                     {item.mName || 'Unknown Model'}
                   </span>
-                  <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100 inline-block">
-                    {item.pCode || 'N/A'} {item.matchedColor ? ` • ${item.matchedColor}` : ''}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100 inline-block">
+                      {item.pCode || 'N/A'} {item.matchedColor ? ` • ${item.matchedColor}` : ''}
+                    </span>
+                    {item.outlet && item.outlet !== 'YES' && item.outlet !== 'TRUE' && (
+                      <span className="text-[9px] font-black text-slate-600 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded-md shadow-sm">
+                        📍 {item.outlet}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex justify-between items-start mb-3 border-b border-slate-100/80 pb-3">
@@ -1648,6 +1690,18 @@ export default function App() {
   const [calculatorData, setCalculatorData] = useState(null);
   const [inventoryModalData, setInventoryModalData] = useState(null);
   const [toastMsg, setToastMsg] = useState('');
+  const [iframeData, setIframeData] = useState(null);
+  
+  const [noticeMsg, setNoticeMsg] = useState(() => {
+    return localStorage.getItem('samsung_dealer_notice') || '';
+  });
+  
+  const [customButtons, setCustomButtons] = useState(() => {
+    try {
+      const stored = localStorage.getItem('samsung_dealer_custom_btns');
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) { return []; }
+  });
   
   const [storeName, setStoreName] = useState(() => {
     try { return localStorage.getItem('samassist_store_name') || 'Samsung Store'; } 
@@ -1776,8 +1830,9 @@ export default function App() {
       const imgMapPromise = fetchImageDB();
       const invMapPromise = fetchInventoryData();
       const colorMapPromise = fetchColorStockData();
+      const noticeMapPromise = fetchNoticeData();
 
-      const [allResults, imgMap, invList, colorList] = await Promise.all([allResultsPromise, imgMapPromise, invMapPromise, colorMapPromise]);
+      const [allResults, imgMap, invList, colorList, noticeResult] = await Promise.all([allResultsPromise, imgMapPromise, invMapPromise, colorMapPromise, noticeMapPromise]);
       
       const combined = allResults.reduce((acc, curr) => acc.concat(curr.data || []), []);
       const fDate = allResults.map(r => r.fetchedDate).find(d => d && d.length > 0);
@@ -1839,7 +1894,11 @@ export default function App() {
           const now = new Date();
           localStorage.setItem('samsung_dealer_data', JSON.stringify(updated));
           localStorage.setItem('samsung_dealer_sync_time', now.toISOString());
+          localStorage.setItem('samsung_dealer_notice', noticeResult.message);
+          localStorage.setItem('samsung_dealer_custom_btns', JSON.stringify(noticeResult.buttons));
           if (fDate) { localStorage.setItem('samsung_dealer_sheet_date', fDate); setSheetDate(fDate); }
+          setNoticeMsg(noticeResult.message);
+          setCustomButtons(noticeResult.buttons);
           setLastSynced(now); setIsOutdated(false);
         } catch(e) {}
         
@@ -1860,6 +1919,7 @@ export default function App() {
       const data = localStorage.getItem('samsung_dealer_data');
       const time = localStorage.getItem('samsung_dealer_sync_time');
       const date = localStorage.getItem('samsung_dealer_sheet_date');
+      const btns = localStorage.getItem('samsung_dealer_custom_btns');
       if (data) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) { setPhones(parsed); hasCache = true; }
@@ -1870,6 +1930,7 @@ export default function App() {
             setIsOutdated(diffInHours > 24);
         }
         if (date) setSheetDate(date);
+        if (btns) setCustomButtons(JSON.parse(btns));
       }
     } catch(e) {}
     fetchAllData(hasCache);
@@ -2247,9 +2308,23 @@ export default function App() {
               </select>
               <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
             </div>
-            <div className="flex overflow-x-auto gap-2 hide-scrollbar flex-1 pr-2">
+            <div className="flex overflow-x-auto gap-2 hide-scrollbar flex-1 pr-2 items-center">
               {categories.map((category) => (
-                <button key={category} onClick={() => setActiveCategory(category)} className={`whitespace-nowrap px-4 py-2 rounded-lg text-[11px] font-bold border transition-colors ${activeCategory === category ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>{category}</button>
+                <button key={category} onClick={() => setActiveCategory(category)} className={`shrink-0 whitespace-nowrap px-4 py-2 rounded-lg text-[11px] font-bold border transition-colors ${activeCategory === category ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>{category}</button>
+              ))}
+              
+              {customButtons.length > 0 && (
+                <div className="w-px h-6 bg-slate-200 mx-0.5 shrink-0"></div>
+              )}
+              
+              {customButtons.map((btn, idx) => (
+                <button 
+                  key={`custom-btn-${idx}`} 
+                  onClick={() => setIframeData({ url: btn.url, title: btn.name })}
+                  className="shrink-0 whitespace-nowrap px-3.5 py-2 rounded-lg text-[11px] font-bold border transition-colors bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 flex items-center gap-1.5 shadow-sm"
+                >
+                  {btn.name} <ArrowRight size={12} strokeWidth={3} />
+                </button>
               ))}
             </div>
           </div>
@@ -2264,6 +2339,35 @@ export default function App() {
           </div>
         ) : (
           <>
+            {noticeMsg && (
+              <div className="mb-5 relative rounded-[20px] p-4 sm:p-5 flex items-start gap-3.5 shadow-sm border border-indigo-100/50 animate-fade-in overflow-hidden bg-gradient-to-br from-indigo-50/80 via-white to-purple-50/80">
+                {/* Subtle side accent line */}
+                <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b from-indigo-500 to-purple-500"></div>
+                
+                {/* Decorative soft background glow */}
+                <div className="absolute -right-10 -top-10 w-40 h-40 bg-purple-100/50 rounded-full blur-3xl pointer-events-none"></div>
+                
+                {/* Premium Icon Box */}
+                <div className="bg-white shadow-sm p-2.5 rounded-xl shrink-0 relative border border-slate-100/80 z-10">
+                  <div className="absolute inset-0 bg-indigo-500/10 blur-md rounded-xl"></div>
+                  <MessageCircle size={20} className="text-indigo-600 relative z-10" />
+                </div>
+                
+                {/* Text Content */}
+                <div className="flex flex-col pt-0.5 w-full z-10">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="flex h-2 w-2 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                    </span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600">
+                      Important Notice
+                    </span>
+                  </div>
+                  <p className="text-[13px] font-bold text-slate-800 leading-relaxed whitespace-pre-wrap">{noticeMsg}</p>
+                </div>
+              </div>
+            )}
             <div className="flex flex-col gap-3.5">
               {displayPhones.length > 0 ? (
                 displayPhones.map((phone) => (
@@ -2305,6 +2409,41 @@ export default function App() {
           </>
         )}
       </main>
+
+      {iframeData && (
+        <div className="fixed inset-0 z-[400] bg-[#F8FAFC] flex flex-col animate-fade-in">
+          {/* Custom Header for Portal */}
+          <div className="bg-white border-b border-slate-200 px-3 py-3 flex items-center justify-between z-20 shadow-sm shrink-0">
+            <button 
+              onClick={() => setIframeData(null)} 
+              className="flex items-center gap-1 p-2 bg-slate-100 hover:bg-slate-200 rounded-full text-slate-700 transition-colors font-bold text-[12px] pr-4 shadow-inner"
+            >
+              <ChevronLeft size={18} strokeWidth={3} />
+              <span>Back</span>
+            </button>
+            <h2 className="text-[14px] font-black text-slate-900 truncate px-4 flex-1 text-center">{iframeData.title}</h2>
+            <button 
+              onClick={() => setIframeData(null)} 
+              className="p-2 bg-slate-100 hover:bg-red-100 hover:text-red-600 rounded-full text-slate-600 transition-colors"
+            >
+              <X size={18} strokeWidth={2.5} />
+            </button>
+          </div>
+          
+          {/* Iframe Window */}
+          <div className="flex-1 relative w-full h-full bg-slate-50">
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <RefreshCw className="text-indigo-300 h-8 w-8 animate-spin" />
+            </div>
+            <iframe 
+              src={iframeData.url} 
+              className="absolute inset-0 w-full h-full border-none z-10 bg-transparent"
+              title={iframeData.title}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            ></iframe>
+          </div>
+        </div>
+      )}
       
       {showScroll && (
         <button onClick={scrollTop} className="bg-indigo-600 text-white fixed bottom-5 right-5 p-3.5 rounded-full shadow-lg z-50 flex items-center justify-center hover:bg-indigo-700 hover:-translate-y-1 transition-all">
