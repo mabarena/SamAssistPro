@@ -173,14 +173,15 @@ const fetchInventoryData = async () => {
     const rows = csvToArray(text);
     const invList = [];
     for (let i = 1; i < rows.length; i++) {
-      const row = rows[i]; if (!row || row.length < 7) continue;
+      const row = rows[i]; if (!row || row.length < 8) continue;
       const rawPCode = String(row[0] || '').trim().toUpperCase();
       const mName = String(row[1] || '').trim().toUpperCase().replace(/\s+/g, '');
-      const imei = String(row[2] || '').trim();
-      const date = String(row[3] || '').trim();
-      const dp = String(row[4] || '').trim();
-      const mop = String(row[5] || '').trim();
-      const available = String(row[6] || '').trim().toUpperCase();
+      const invColor = String(row[2] || '').trim();
+      const imei = String(row[3] || '').trim();
+      const date = String(row[4] || '').trim();
+      const dp = String(row[5] || '').trim();
+      const mop = String(row[6] || '').trim();
+      const available = String(row[7] || '').trim().toUpperCase();
       if (!available || available === '0' || available === 'NO' || available === 'FALSE' || available === 'SOLD') continue;
       let matchCode = rawPCode.replace(/\s+/g, '');
       if (matchCode.startsWith('SM-')) {
@@ -188,7 +189,7 @@ const fetchInventoryData = async () => {
         if (matchCode.length >= 11) variant = matchCode.substring(10, 11); 
         matchCode = base5 + variant; 
       }
-      invList.push({ pCode: rawPCode, matchCode, mName, imei, date, dp, mop, outlet: available });
+      invList.push({ pCode: rawPCode, matchCode, mName, invColor, imei, date, dp, mop, outlet: available });
     }
     return invList;
   } catch(e) { return []; }
@@ -1696,6 +1697,15 @@ export default function App() {
     return localStorage.getItem('samsung_dealer_notice') || '';
   });
   
+  const [noticeDate, setNoticeDate] = useState(() => {
+    let d = localStorage.getItem('samsung_dealer_notice_date');
+    if (!d && localStorage.getItem('samsung_dealer_notice')) {
+      d = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      localStorage.setItem('samsung_dealer_notice_date', d);
+    }
+    return d || '';
+  });
+  
   const [customButtons, setCustomButtons] = useState(() => {
     try {
       const stored = localStorage.getItem('samsung_dealer_custom_btns');
@@ -1861,7 +1871,7 @@ export default function App() {
             if (!seenImei.has(identifier)) {
               seenImei.add(identifier);
               const colorMatch = colorList.find(c => c.pCode === item.pCode);
-              uniqueInv.push({ ...item, matchedColor: colorMatch ? colorMatch.color : '' });
+              uniqueInv.push({ ...item, matchedColor: item.invColor || (colorMatch ? colorMatch.color : '') });
             }
           });
 
@@ -1894,10 +1904,20 @@ export default function App() {
           const now = new Date();
           localStorage.setItem('samsung_dealer_data', JSON.stringify(updated));
           localStorage.setItem('samsung_dealer_sync_time', now.toISOString());
+          
+          const prevNotice = localStorage.getItem('samsung_dealer_notice');
+          let nDate = localStorage.getItem('samsung_dealer_notice_date');
+          if (noticeResult.message && noticeResult.message !== prevNotice) {
+            nDate = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+            localStorage.setItem('samsung_dealer_notice_date', nDate);
+          }
+          
           localStorage.setItem('samsung_dealer_notice', noticeResult.message);
           localStorage.setItem('samsung_dealer_custom_btns', JSON.stringify(noticeResult.buttons));
           if (fDate) { localStorage.setItem('samsung_dealer_sheet_date', fDate); setSheetDate(fDate); }
+          
           setNoticeMsg(noticeResult.message);
+          if (nDate) setNoticeDate(nDate);
           setCustomButtons(noticeResult.buttons);
           setLastSynced(now); setIsOutdated(false);
         } catch(e) {}
@@ -1920,6 +1940,7 @@ export default function App() {
       const time = localStorage.getItem('samsung_dealer_sync_time');
       const date = localStorage.getItem('samsung_dealer_sheet_date');
       const btns = localStorage.getItem('samsung_dealer_custom_btns');
+      const nDate = localStorage.getItem('samsung_dealer_notice_date');
       if (data) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) { setPhones(parsed); hasCache = true; }
@@ -1931,6 +1952,7 @@ export default function App() {
         }
         if (date) setSheetDate(date);
         if (btns) setCustomButtons(JSON.parse(btns));
+        if (nDate) setNoticeDate(nDate);
       }
     } catch(e) {}
     fetchAllData(hasCache);
@@ -2354,15 +2376,22 @@ export default function App() {
                 </div>
                 
                 {/* Text Content */}
-                <div className="flex flex-col pt-0.5 w-full z-10">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="flex h-2 w-2 relative">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-                    </span>
-                    <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600">
-                      Important Notice
-                    </span>
+                <div className="flex flex-col pt-0.5 w-full z-10 relative">
+                  <div className="flex justify-between items-start mb-1.5 w-full">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-2 w-2 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                      </span>
+                      <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600">
+                        Important Notice
+                      </span>
+                    </div>
+                    {noticeDate && (
+                      <span className="text-[9px] font-bold text-slate-400 bg-indigo-50/50 px-1.5 py-0.5 rounded shadow-sm border border-indigo-100/50">
+                        {noticeDate}
+                      </span>
+                    )}
                   </div>
                   <p className="text-[13px] font-bold text-slate-800 leading-relaxed whitespace-pre-wrap">{noticeMsg}</p>
                 </div>
